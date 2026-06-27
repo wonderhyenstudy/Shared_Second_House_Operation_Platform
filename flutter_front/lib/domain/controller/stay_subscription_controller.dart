@@ -32,25 +32,32 @@ class StaySubscriptionController extends ChangeNotifier {
   String? errorMessage;
 
   Future<void> loadMySubscriptions(int userId) async {
-    isLoading = true;
+    isLoading = true;     // 스피너 표시 시작
     errorMessage = null;
-    notifyListeners();
+    notifyListeners();    // UI에 로딩 상태 알림
 
     try {
+      // 1단계: 내 구독 목록 조회 (JWT 기반으로 본인 구독만 반환)
       subscriptions = await _service.getMySubscriptions(userId);
 
-      // 숙소 이름/주소를 병렬로 조회
+      // 2단계: 구독 목록에서 숙소 ID를 중복 없이 추출 (Set으로 dedup)
+      // toSet(): 같은 숙소에 구독이 여러 개 있어도 API 중복 호출 방지
       final ids = subscriptions.map((s) => s.accommodationId).toSet();
+
+      // 3단계: 각 숙소 정보를 Future.wait로 동시에 조회 (순차 조회보다 빠름)
+      // accommodationCache[id]: View에서 sub.accommodationId로 바로 접근 → 별도 API 호출 불필요
       await Future.wait(ids.map((id) async {
         try {
           accommodationCache[id] = await _accomService.getAccommodation(id);
-        } catch (_) {}
+        } catch (_) {
+          // 숙소 조회 실패 시 해당 숙소만 캐시에서 빠짐 → View에서 null 체크로 "로딩 중" 표시
+        }
       }));
     } catch (_) {
       errorMessage = '구독 목록을 불러오지 못했습니다.';
     } finally {
-      isLoading = false;
-      notifyListeners();
+      isLoading = false;  // 스피너 해제
+      notifyListeners();  // UI에 최종 상태 알림 (구독 목록 + 숙소 캐시 반영)
     }
   }
 }
