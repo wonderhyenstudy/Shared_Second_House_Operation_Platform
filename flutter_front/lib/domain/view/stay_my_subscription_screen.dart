@@ -38,6 +38,7 @@ class _StayMySubscriptionScreenState extends State<StayMySubscriptionScreen> {
   @override
   void initState() {
     super.initState();
+    // 첫 프레임 완료 후 구독 목록 로드 (build 중 Provider 호출 방지)
     WidgetsBinding.instance.addPostFrameCallback((_) {
       context.read<StaySubscriptionController>().loadMySubscriptions(
         context.read<AuthProvider>().userId!,
@@ -47,6 +48,7 @@ class _StayMySubscriptionScreenState extends State<StayMySubscriptionScreen> {
 
   @override
   Widget build(BuildContext context) {
+    // context.watch: Controller 상태 변경 시 자동 재빌드
     final ctrl = context.watch<StaySubscriptionController>();
 
     return AppBaseLayout(
@@ -72,6 +74,8 @@ class _StayMySubscriptionScreenState extends State<StayMySubscriptionScreen> {
   );
 
   Widget _buildCard(StaySubscriptionController ctrl, StaySubscriptionDto sub) {
+    // Controller의 accommodationCache에서 숙소 정보 꺼냄 (별도 API 호출 없이 캐시 활용)
+    // null이면 숙소 정보 아직 로딩 중 → "숙소 정보 로딩 중..." 표시
     final accom = ctrl.accommodationCache[sub.accommodationId];
 
     return Container(
@@ -117,6 +121,8 @@ class _StayMySubscriptionScreenState extends State<StayMySubscriptionScreen> {
               const SizedBox(width: 4),
               Expanded(child: Text('구독 기간: ${sub.durationMonths}개월', style: const TextStyle(fontSize: 13, color: AppColors.textSecondary))),
             ]),
+            // ACTIVE 구독만 채팅 + 예약하기 버튼 표시
+            // PENDING/EXPIRED/CANCELLED는 버튼 없음 (구독 중인 사람만 서비스 이용 가능)
             if (sub.isActive) ...[
               const SizedBox(height: 12),
               Row(
@@ -147,6 +153,7 @@ class _StayMySubscriptionScreenState extends State<StayMySubscriptionScreen> {
                           builder: (_) => StayReservationCalendarScreen(
                             accommodationId: sub.accommodationId,
                             accommodationName: accom?.name ?? '',
+                            // 구독 시작일·종료일을 달력 화면에 전달 → minDate / maxDate로 사용
                             subscriptionStartDate: DateTime.tryParse(sub.startDate),
                             subscriptionEndDate: DateTime.tryParse(sub.endDate),
                           ),
@@ -170,21 +177,22 @@ class _StayMySubscriptionScreenState extends State<StayMySubscriptionScreen> {
     );
   }
 
+  // 구독 상태 배지 — DB 상태값(ACTIVE/PENDING/EXPIRED/CANCELLED)을 한국어 배지로 표시
   Widget _statusBadge(String status) {
     switch (status) {
-      case 'ACTIVE':
+      case 'ACTIVE':   // 관리자 승인 완료 → 구독 중
         return Container(
           padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
           decoration: const BoxDecoration(color: Color(0xFFE8F5E9), borderRadius: BorderRadius.all(Radius.circular(20))),
           child: const Text('구독 중', style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: AppColors.success)),
         );
-      case 'PENDING':
+      case 'PENDING':  // 팀원 동의 대기 또는 관리자 승인 대기
         return Container(
           padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
           decoration: const BoxDecoration(color: Color(0xFFFFF8E6), borderRadius: BorderRadius.all(Radius.circular(20))),
           child: const Text('승인 대기', style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: Color(0xFFB07D1A))),
         );
-      default:
+      default:         // EXPIRED(구독 기간 만료) 또는 CANCELLED(취소됨)
         return Container(
           padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
           decoration: const BoxDecoration(color: AppColors.border, borderRadius: BorderRadius.all(Radius.circular(20))),

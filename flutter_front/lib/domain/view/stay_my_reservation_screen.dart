@@ -37,26 +37,29 @@ class _StayMyReservationScreenState extends State<StayMyReservationScreen> {
   @override
   void initState() {
     super.initState();
+    // 첫 프레임 렌더링 완료 후 데이터 로드 (build() 실행 중 Provider 접근 오류 방지)
     WidgetsBinding.instance.addPostFrameCallback((_) {
       context.read<StayReservationController>().loadMyReservations(
-        context.read<AuthProvider>().userId!,
+        context.read<AuthProvider>().userId!, // 로그인된 유저 ID로 내 예약 조회
       );
     });
   }
 
   @override
   Widget build(BuildContext context) {
+    // context.watch: Controller 상태가 바뀔 때마다 이 위젯 자동 재빌드
     final ctrl = context.watch<StayReservationController>();
 
     return AppBaseLayout(
       title: '내 예약 목록',
       body: ctrl.isLoading
-          ? const Center(child: CircularProgressIndicator(color: AppColors.primary))
+          ? const Center(child: CircularProgressIndicator(color: AppColors.primary)) // 로딩 중
           : ctrl.reservations.isEmpty
-              ? _buildEmpty()
+              ? _buildEmpty()  // 예약 없음 안내
               : ListView.builder(
                   padding: const EdgeInsets.all(16),
                   itemCount: ctrl.reservations.length,
+                  // Spring 서버에서 정렬된 순서대로 표시 (다가오는→취소됨→지난 예약)
                   itemBuilder: (_, index) => _buildCard(ctrl, ctrl.reservations[index]),
                 ),
     );
@@ -71,9 +74,11 @@ class _StayMyReservationScreenState extends State<StayMyReservationScreen> {
   );
 
   Widget _buildCard(StayReservationController ctrl, StayReservationDto item) {
-    final isCancelled = item.isCancelled;
-    final isPast = !isCancelled && _isPastReservation(item.endDate);
-    final isFuture = !isCancelled && !isPast && _isFutureReservation(item.startDate);
+    // 상태 판단: DB에는 CONFIRMED / CANCELLED 두 가지만 존재
+    // "지난 예약" / "미래 예약"은 프론트에서 날짜 비교로 구분
+    final isCancelled = item.isCancelled;                              // status == 'CANCELLED'
+    final isPast = !isCancelled && _isPastReservation(item.endDate);   // 종료일이 오늘 이전
+    final isFuture = !isCancelled && !isPast && _isFutureReservation(item.startDate); // 시작일이 오늘 이후
 
     return Container(
       margin: const EdgeInsets.only(bottom: 12),
@@ -139,8 +144,10 @@ class _StayMyReservationScreenState extends State<StayMyReservationScreen> {
     );
   }
 
+  // 상태 배지 — DB 상태(CONFIRMED/CANCELLED)와 날짜 비교 결과를 조합해 배지 결정
   Widget _statusBadge(String status, String endDate) {
     if (status == 'CANCELLED') {
+      // DB에 명시적으로 취소된 상태
       return Container(
         padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
         decoration: BoxDecoration(color: AppColors.border, borderRadius: BorderRadius.circular(20)),
@@ -148,12 +155,14 @@ class _StayMyReservationScreenState extends State<StayMyReservationScreen> {
       );
     }
     if (_isPastReservation(endDate)) {
+      // CONFIRMED이지만 종료일이 오늘 이전 → "지난 예약" (프론트에서 날짜 비교로 판단)
       return Container(
         padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
         decoration: BoxDecoration(color: const Color(0xFFFEF3C7), borderRadius: BorderRadius.circular(20)),
         child: const Text('지난 예약', style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: Color(0xFF92400E))),
       );
     }
+    // CONFIRMED이고 종료일이 오늘 이후 → "예약 확정"
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
       decoration: const BoxDecoration(color: Color(0xFFE8F5E9), borderRadius: BorderRadius.all(Radius.circular(20))),
@@ -161,17 +170,21 @@ class _StayMyReservationScreenState extends State<StayMyReservationScreen> {
     );
   }
 
+  // 종료일이 현재 시각 이전이면 지난 예약
   bool _isPastReservation(String endDate) {
     final end = DateTime.tryParse(endDate);
     return end != null && end.isBefore(DateTime.now());
   }
 
+  // 시작일이 현재 시각 이후이면 미래 예약 (취소 버튼 표시 조건)
   bool _isFutureReservation(String startDate) {
     final start = DateTime.tryParse(startDate);
     return start != null && start.isAfter(DateTime.now());
   }
 
+  // 취소 확인 다이얼로그 → 확인 시 API 호출
   Future<void> _confirmCancel(StayReservationController ctrl, int id) async {
+    // showDialog: 사용자 선택을 기다리는 비동기 다이얼로그, 결과는 bool?
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
@@ -183,6 +196,7 @@ class _StayMyReservationScreenState extends State<StayMyReservationScreen> {
         ],
       ),
     );
+    // 다이얼로그에서 "취소하기" 선택 + 위젯이 아직 트리에 있을 때만 처리
     if (confirmed == true && mounted) {
       final success = await ctrl.cancelReservation(id, context.read<AuthProvider>().userId!);
       if (mounted) {

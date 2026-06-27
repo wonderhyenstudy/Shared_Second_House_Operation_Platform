@@ -71,8 +71,11 @@ class _StayReservationCalendarScreenState extends State<StayReservationCalendarS
   @override
   void initState() {
     super.initState();
+    // 달력 포커스를 구독 시작일 또는 오늘 기준으로 초기화
     _focusedDay = _calendarFirstDay;
+    // WidgetsBindingObserver 등록 → 앱 생명주기(포그라운드/백그라운드) 변화 감지
     WidgetsBinding.instance.addObserver(this);
+    // 첫 프레임 렌더링 후 숙소별 예약 목록 로드 (build 중 Provider 호출 방지)
     WidgetsBinding.instance.addPostFrameCallback((_) {
       context.read<StayReservationController>().loadAccommodationReservations(widget.accommodationId);
     });
@@ -80,46 +83,54 @@ class _StayReservationCalendarScreenState extends State<StayReservationCalendarS
 
   @override
   void dispose() {
+    // 화면이 사라질 때 Observer 해제 (메모리 누수 방지)
     WidgetsBinding.instance.removeObserver(this);
     super.dispose();
   }
 
+  // 앱 생명주기 변화 감지 → 포그라운드 복귀 시 예약 목록 자동 갱신
+  // 다른 사용자가 앱 사용 중 같은 날짜를 예약한 경우에도 달력에 즉시 반영
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
     if (state == AppLifecycleState.resumed && mounted) {
+      // resumed: 앱이 백그라운드 → 포그라운드로 돌아온 순간
       context.read<StayReservationController>().loadAccommodationReservations(widget.accommodationId);
     }
   }
 
+  // 달력에서 날짜 선택 가능 여부 판단 — false 반환 시 해당 날짜 비활성화(취소선)
   bool _isDayEnabled(DateTime day, StayReservationController ctrl) {
-    final d = _normalize(day);
+    final d = _normalize(day); // 시간 제거, 날짜만 비교
 
-    // 구독 기간 밖
+    // 조건 1: 구독 기간(firstDay ~ lastDay) 밖의 날짜는 선택 불가
     if (d.isBefore(_calendarFirstDay) || d.isAfter(_calendarLastDay)) return false;
 
-    // 이미 예약된 날짜 블록 (CANCELLED 제외)
+    // 조건 2: CONFIRMED 예약 기간 내 날짜 → 선택 불가 (CANCELLED는 다시 선택 가능)
     for (final r in ctrl.accommodationReservations) {
-      if (r.status == 'CANCELLED') continue;
+      if (r.status == 'CANCELLED') continue; // 취소된 예약은 재예약 가능 → 건너뜀
       if (r.startDate.isEmpty || r.endDate.isEmpty) continue;
       try {
         final rStart = _normalize(DateTime.parse(r.startDate));
         final rEnd = _normalize(DateTime.parse(r.endDate));
+        // d가 기존 예약 기간(rStart ~ rEnd) 안에 있으면 비활성
         if (!d.isBefore(rStart) && !d.isAfter(rEnd)) return false;
       } catch (_) {
-        continue;
+        continue; // 날짜 파싱 실패 시 무시
       }
     }
 
-    // 시작일 선택 후 종료일 미선택 상태: 다음 예약 시작일 이후는 선택 불가
+    // 조건 3: 시작일 선택 후, 종료일 선택 중인 상태
+    // → 내 선택 시작일 이후 첫 번째 기존 예약 시작일부터는 선택 불가 (dynamicMaxDate 효과)
     if (_rangeStart != null && _rangeEnd == null) {
       final start = _normalize(_rangeStart!);
-      DateTime? nextBookedStart;
+      DateTime? nextBookedStart; // 내 시작일 이후 가장 빠른 기존 예약 시작일
       for (final r in ctrl.accommodationReservations) {
         if (r.status == 'CANCELLED') continue;
         if (r.startDate.isEmpty) continue;
         try {
           final rStart = _normalize(DateTime.parse(r.startDate));
           if (rStart.isAfter(start)) {
+            // 더 이른 예약이 있으면 교체
             if (nextBookedStart == null || rStart.isBefore(nextBookedStart)) {
               nextBookedStart = rStart;
             }
@@ -128,10 +139,11 @@ class _StayReservationCalendarScreenState extends State<StayReservationCalendarS
           continue;
         }
       }
+      // 다음 예약 시작일과 같거나 이후 날짜는 선택 불가 → 기존 예약 사이에 끼어드는 예약 차단
       if (nextBookedStart != null && !d.isBefore(nextBookedStart)) return false;
     }
 
-    return true;
+    return true; // 위 조건에 걸리지 않으면 선택 가능
   }
 
   @override
@@ -290,16 +302,21 @@ class _StayReservationCalendarScreenState extends State<StayReservationCalendarS
   }
 
   Future<void> _handleReservation(StayReservationController ctrl) async {
+    // Controller에 선택한 날짜 범위 저장 (createReservation에서 사용)
     ctrl.selectDateRange(_rangeStart!, _rangeEnd!);
+    // userId는 AuthProvider에서 가져옴 (로그인된 유저 ID)
     final success = await ctrl.createReservation(widget.accommodationId, context.read<AuthProvider>().userId!);
 
+    // 비동기 완료 후 위젯이 아직 트리에 있는지 확인 (없으면 context 사용 불가)
     if (!mounted) return;
     if (success) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('예약이 완료되었습니다!'), backgroundColor: AppColors.success),
       );
+      // 예약 성공 → 이전 화면(숙소 상세)으로 돌아감
       Navigator.pop(context);
     } else {
+      // 예약 실패 (날짜 중복 등) → 에러 메시지 표시
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text(ctrl.errorMessage ?? '예약에 실패했습니다.'), backgroundColor: AppColors.danger),
       );

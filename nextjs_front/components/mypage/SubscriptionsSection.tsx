@@ -1,3 +1,23 @@
+/*
+ * ==================================================================================
+ * [파일 정보]
+ * 위치  : components/mypage/SubscriptionsSection.tsx
+ * 역할  : 내 구독 목록 컴포넌트 (마이페이지 탭 중 하나)
+ * 사용처 : app/mypage/page.tsx → activeMenu === 'subscriptions' 일 때 렌더링
+ * ----------------------------------------------------------------------------------
+ * [연관 파일]
+ * - lib/api.ts                              : fetch 클라이언트 (Bearer 토큰 자동 첨부)
+ * - Spring: SubscriptionsController.java    : GET /subscriptions/my/{userId}
+ * - Spring: StayAccommodationController.java: GET /api/stay/accommodations/{id}
+ * - Spring: GuestChatController.java        : GET /api/guest/chat/room/{accommodationId}
+ * ----------------------------------------------------------------------------------
+ * [기능 목록]
+ * - userId 획득 → 내 구독 목록 조회 (순차) → 숙소 정보 병렬 조회
+ * - 상태 배지: 구독 중(ACTIVE) / 승인 대기(PENDING) / 만료됨(EXPIRED) / 취소됨(CANCELLED)
+ * - ACTIVE 구독만 채팅 + 예약하기 버튼 표시
+ * ==================================================================================
+ */
+
 "use client";
 
 import { useEffect, useState } from "react";
@@ -15,19 +35,22 @@ interface AccommodationInfo {
   address: string;
 }
 
+// SubscriptionsUserResp에 숙소 이름·주소를 추가 확장한 로컬 타입
 interface SubscriptionRow extends SubscriptionsUserResp {
   accommodationName?: string;
   accommodationAddress?: string;
 }
 
 export default function SubscriptionsSection() {
-  const router = useRouter(); // 추가1
+  const router = useRouter();
   const [rows, setRows] = useState<SubscriptionRow[]>([]);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
+    // 1단계: 로그인 유저 정보 조회 (JWT에서 userId 추출)
     api
       .get<UserResp>("/api/users")
+      // 2단계: userId로 내 구독 목록 조회 (userId를 먼저 알아야 하므로 순차 처리)
       .then((userData) =>
         api.get<SubscriptionsUserResp[]>(
           `/api/subscriptions/my/${userData.userId}`,
@@ -35,7 +58,8 @@ export default function SubscriptionsSection() {
       )
       .then((subs) => {
         const list = Array.isArray(subs) ? subs : [];
-        // 숙소 이름·주소 병렬 조회 (permitAll)
+        // 3단계: 각 구독의 숙소 이름·주소를 Promise.all로 병렬 조회
+        // 숙소 정보 API는 인증 없이 호출 가능 (permitAll)
         return Promise.all(
           list.map((s) =>
             api
@@ -43,10 +67,11 @@ export default function SubscriptionsSection() {
                 `/api/stay/accommodations/${s.accommodationId}`,
               )
               .then((acc) => ({
-                ...s,
+                ...s,                              // 기존 구독 데이터 유지
                 accommodationName: acc.name,
                 accommodationAddress: acc.address,
               }))
+              // 숙소 정보 조회 실패 시 이름·주소 없이 구독 카드는 표시 (전체 실패 방지)
               .catch(() => ({ ...s })),
           ),
         );
@@ -56,16 +81,16 @@ export default function SubscriptionsSection() {
       .finally(() => setLoading(false));
   }, []);
 
-  // 추가2
+  // 채팅 버튼 클릭 — 숙소 ID로 채팅방 ID를 조회한 뒤 채팅 페이지로 이동
   const handleChatButtonClick = async (accommodationId: number) => {
     try {
-      // 백엔드 컨트롤러에 숙소 ID를 보내 방 정보(id)를 받아옴
+      // 백엔드에 숙소 ID를 보내 해당 숙소 채팅방 정보(id)를 받아옴
       const chatRoom = await api.get<{ id: number }>(
         `/api/guest/chat/room/${accommodationId}`,
       );
 
       if (chatRoom && chatRoom.id) {
-        // 게스트챗 파일이 인식하는 쿼리스트링(?roomId=방번호) 형태로 리다이렉트
+        // 채팅 페이지에서 ?roomId=방번호 쿼리스트링으로 방을 식별함
         router.push(`/guestChat?roomId=${chatRoom.id}`);
       } else {
         alert("채팅방 정보를 불러올 수 없습니다.");
@@ -76,6 +101,9 @@ export default function SubscriptionsSection() {
     }
   };
 
+  // 구독 상태 → 한국어 레이블 + 배지 색상 매핑
+  // ACTIVE: 관리자 승인 완료 / PENDING: 팀원 동의 or 관리자 승인 대기
+  // EXPIRED: 구독 기간 만료 / CANCELLED: 취소됨
   const getStatusBadge = (status: SubscriptionStatus) => {
     switch (status) {
       case "ACTIVE":
@@ -183,7 +211,8 @@ export default function SubscriptionsSection() {
                 <span className="text-[#171717]">({r.durationMonths}개월)</span>
               </div>
 
-              {/* 채팅 버튼 - ACTIVE 구독만 표시 */}
+              {/* 채팅 + 예약하기 버튼 — ACTIVE(구독 중) 상태만 표시
+                  PENDING/EXPIRED/CANCELLED는 서비스 이용 불가이므로 버튼 없음 */}
               {r.status === "ACTIVE" && (
                 <div className="flex gap-2">
                   <button

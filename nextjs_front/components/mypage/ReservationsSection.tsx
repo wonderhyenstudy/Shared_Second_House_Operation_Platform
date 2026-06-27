@@ -1,9 +1,32 @@
+/*
+ * ==================================================================================
+ * [파일 정보]
+ * 위치  : components/mypage/ReservationsSection.tsx
+ * 역할  : 내 예약 목록 컴포넌트 (마이페이지 탭 중 하나)
+ * 사용처 : app/mypage/page.tsx → activeMenu === 'reservations' 일 때 렌더링
+ * ----------------------------------------------------------------------------------
+ * [연관 파일]
+ * - lib/api.ts                          : fetch 클라이언트 (Bearer 토큰 자동 첨부)
+ * - ReservationRouteMap.tsx             : 이동경로 지도 컴포넌트 (경로 없으면 자동 숨김)
+ * - Spring: StayReservationController  : GET /api/stay/reservations
+ *                                        PATCH /api/stay/reservations/{id}/cancel
+ * ----------------------------------------------------------------------------------
+ * [기능 목록]
+ * - 내 예약 목록 조회 (JWT 기반, 본인 예약만 반환)
+ * - 상태 배지: 예약 확정 / 지난 예약 / 취소됨 (날짜 비교로 결정)
+ * - 미래 확정 예약만 취소 버튼 표시
+ * - 취소 후 전체 재조회 없이 해당 항목 상태만 즉시 변경
+ * - 예약 기간 내 이동경로 있으면 지도 표시 (ReservationRouteMap)
+ * ==================================================================================
+ */
+
 "use client";
 
 import { useEffect, useState } from "react";
 import { api } from "@/lib/api";
 import ReservationRouteMap from "@/app/my/reservations/components/ReservationRouteMap";
 
+// Spring에서 내려오는 예약 응답 DTO 타입
 interface ReservationDto {
   id: number;
   accommodationId: number;
@@ -11,13 +34,15 @@ interface ReservationDto {
   accommodationAddress: string;
   startDate: string;
   endDate: string;
-  status: "CONFIRMED" | "CANCELLED";
+  status: "CONFIRMED" | "CANCELLED"; // DB에 존재하는 상태값 (두 가지만)
 }
 
 export default function ReservationsSection() {
   const [reservations, setReservations] = useState<ReservationDto[]>([]);
   const [loading, setLoading] = useState(true);
 
+  // 컴포넌트 마운트 시 내 예약 목록 조회 (JWT 기반 → 본인 예약만 반환)
+  // Spring 서버에서 이미 정렬된 상태로 반환: 다가오는 예약 → 취소됨 → 지난 예약
   useEffect(() => {
     api
       .get<ReservationDto[]>("/api/stay/reservations")
@@ -26,12 +51,15 @@ export default function ReservationsSection() {
       .finally(() => setLoading(false));
   }, []);
 
+  // 예약 취소 — 서버 API 호출 후 전체 재조회 없이 해당 항목만 로컬 상태 변경
   const handleCancel = (id: number) => {
     if (!confirm("예약을 취소할까요?")) return;
 
     api
       .patch<boolean>(`/api/stay/reservations/${id}/cancel`, {})
       .then(() => {
+        // 목록 전체를 다시 불러오지 않고 해당 항목의 status만 CANCELLED로 교체
+        // prev.map(): 배열을 순회하며 id가 일치하는 항목만 변경된 객체로 대체
         setReservations((prev) =>
           prev.map((r) => (r.id === id ? { ...r, status: "CANCELLED" } : r)),
         );
@@ -39,12 +67,14 @@ export default function ReservationsSection() {
       .catch(() => alert("예약 취소에 실패했어요. 다시 시도해주세요."));
   };
 
+  // 상태 배지 결정 — DB 상태(CONFIRMED/CANCELLED)와 날짜 비교 조합
+  // "지난 예약"은 DB에 없는 개념 → 프론트에서 종료일과 오늘을 비교해 구분
   const getStatusLabel = (r: ReservationDto) => {
     if (r.status === "CANCELLED")
       return { label: "취소됨", cls: "bg-[#F0EBE5] text-[#8C8178]" };
-    if (new Date(r.endDate) < new Date())
+    if (new Date(r.endDate) < new Date())          // 종료일이 오늘 이전 → 지난 예약
       return { label: "지난 예약", cls: "bg-[#fef3c7] text-[#92400e]" };
-    return { label: "예약 확정", cls: "bg-[#EAF3DE] text-[#3B6D11]" };
+    return { label: "예약 확정", cls: "bg-[#EAF3DE] text-[#3B6D11]" }; // CONFIRMED + 미래
   };
 
   if (loading) {
@@ -93,6 +123,7 @@ export default function ReservationsSection() {
       ) : (
         reservations.map((r, i) => {
           const { label, cls } = getStatusLabel(r);
+          // 취소 버튼 표시 조건: CONFIRMED 상태이고 시작일이 오늘 이후인 예약만 취소 가능
           const isFuture =
             r.status === "CONFIRMED" && new Date(r.startDate) > new Date();
 

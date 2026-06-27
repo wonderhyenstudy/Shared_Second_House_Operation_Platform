@@ -75,13 +75,15 @@ class _StaySubscriptionApplyScreenState extends State<StaySubscriptionApplyScree
   // 오늘 날짜 (시간 제거)
   DateTime get _today => DateTime(DateTime.now().year, DateTime.now().month, DateTime.now().day);
 
-  // [날짜 검증 추가] 종료일 = 시작일 + 계약 개월수
+  // 종료일 자동 계산 — 시작일 + 계약 개월수
+  // DateTime 생성자에 month+N을 직접 넣으면 자동으로 다음 해로 넘어감 (예: month=13 → 내년 1월)
   DateTime? get _endDate {
     if (_startDate == null) return null;
     return DateTime(_startDate!.year, _startDate!.month + _durationMonths, _startDate!.day);
   }
 
-  // [날짜 검증 추가] 달력 비활성화 날짜 집합 (사용 불가 기간의 모든 날짜)
+  // 사용 불가 기간의 모든 날짜를 Set으로 변환 — 달력에서 빠르게 비활성화 여부 조회
+  // Set 사용 이유: contains() 연산이 O(1)로 빠름 (List는 O(n))
   Set<DateTime> get _blockedDateSet {
     final Set<DateTime> dates = {};
     for (final p in _blockedPeriods) {
@@ -89,42 +91,51 @@ class _StaySubscriptionApplyScreenState extends State<StaySubscriptionApplyScree
       try {
         DateTime cur = DateTime.parse(p.startDate);
         final end = DateTime.parse(p.endDate);
+        // 시작일부터 종료일 하루 전까지 모든 날짜를 Set에 추가 (종료일 당일 제외 → 경계 처리)
         while (cur.isBefore(end)) {
-          dates.add(DateTime(cur.year, cur.month, cur.day));
+          dates.add(DateTime(cur.year, cur.month, cur.day)); // 시간 제거 후 추가
           cur = cur.add(const Duration(days: 1));
         }
       } catch (_) {
-        continue;
+        continue; // 날짜 파싱 실패 시 무시
       }
     }
     return dates;
   }
 
-  // [날짜 검증 추가] 선택 기간이 사용 불가 기간과 겹치는지 실시간 체크
-  // 겹침 조건: blockedStart < newEnd AND blockedEnd > newStart (경계 맞닿는 경우는 겹침 아님)
+  // 선택 기간이 사용 불가 기간과 겹치는지 실시간 체크 (getter → _startDate 변경 시 자동 재계산)
+  // 겹침 조건: blockedStart < newEnd AND blockedEnd > newStart
+  // → 경계가 맞닿는 경우(예: 내 종료일 = 기존 시작일)는 겹침 아님
   bool get _hasDateConflict {
     if (_startDate == null || _endDate == null) return false;
     final startStr = _fmtDateStr(_startDate!);
     final endStr = _fmtDateStr(_endDate!);
+    // any(): 하나라도 겹치는 기간이 있으면 true
     return _blockedPeriods.any(
       (p) => p.startDate.compareTo(endStr) < 0 && p.endDate.compareTo(startStr) > 0,
     );
   }
 
-  // [날짜 검증 추가] 신청 가능 기간 계산 — 사용 불가 기간 사이의 빈 구간
+  // 신청 가능 기간 자동 계산 — 사용 불가 기간 사이의 빈 구간을 도출
+  // 예) 불가: [3/1~4/1, 5/1~6/1] → 가능: [오늘~3/1, 4/1~5/1, 6/1~제한없음]
   List<Map<String, String?>> get _availableWindows {
     final todayStr = _fmtDateStr(_today);
+    // 사용 불가 기간이 없으면 오늘부터 제한 없음
     if (_blockedPeriods.isEmpty) return [{'from': todayStr, 'to': null}];
+    // 시작일 기준 오름차순 정렬 (... 스프레드로 원본 불변)
     final sorted = [..._blockedPeriods]..sort((a, b) => a.startDate.compareTo(b.startDate));
     final List<Map<String, String?>> windows = [];
+    // 오늘 ~ 첫 번째 사용 불가 시작일 사이에 빈 공간이 있으면 가능 기간으로 추가
     if (sorted.first.startDate.compareTo(todayStr) > 0) {
       windows.add({'from': todayStr, 'to': sorted.first.startDate});
     }
+    // 연속된 사용 불가 기간 사이의 빈 구간을 가능 기간으로 추가
     for (int i = 0; i < sorted.length - 1; i++) {
       if (sorted[i].endDate.compareTo(sorted[i + 1].startDate) < 0) {
         windows.add({'from': sorted[i].endDate, 'to': sorted[i + 1].startDate});
       }
     }
+    // 마지막 사용 불가 기간 이후는 제한 없음 (to: null → "제한 없음" 표시)
     windows.add({'from': sorted.last.endDate, 'to': null});
     return windows;
   }
@@ -172,22 +183,24 @@ class _StaySubscriptionApplyScreenState extends State<StaySubscriptionApplyScree
     });
   }
 
+  // 구독 신청 제출 — 입력값 검증 후 API 호출
   Future<void> _handleSubmit() async {
     if (_startDate == null) return;
+    // TextEditingController 목록에서 실제 입력된 값만 추출 (빈 칸 제외)
     final memberIds = _memberControllers
         .map((c) => c.text.trim())
         .where((id) => id.isNotEmpty)
         .toList();
 
-    setState(() => _isLoading = true);
+    setState(() => _isLoading = true); // 버튼 로딩 상태로 변경
 
     try {
       await _service.applySubscription(
-        leaderId: _leaderId,
+        leaderId: _leaderId,                    // 로그인 유저 = 대표자
         accommodationId: widget.accommodation.id,
         durationMonths: _durationMonths,
-        memberIdentifiers: memberIds,
-        startDate: _fmtDateStr(_startDate!), // [날짜 검증 추가] 희망 시작일 전달
+        memberIdentifiers: memberIds,           // 팀원 아이디/이메일 목록
+        startDate: _fmtDateStr(_startDate!),   // 희망 시작일 "YYYY-MM-DD" 전달
       );
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
@@ -196,9 +209,10 @@ class _StaySubscriptionApplyScreenState extends State<StaySubscriptionApplyScree
             backgroundColor: AppColors.success,
           ),
         );
-        Navigator.pop(context);
+        Navigator.pop(context); // 성공 → 이전 화면(숙소 상세)으로 복귀
       }
     } catch (e) {
+      // 실패 원인: 없는 팀원 ID, 날짜 겹침, 중복 구독 등
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
@@ -208,15 +222,16 @@ class _StaySubscriptionApplyScreenState extends State<StaySubscriptionApplyScree
         );
       }
     } finally {
+      // 성공/실패 관계없이 로딩 상태 해제
       if (mounted) setState(() => _isLoading = false);
     }
   }
 
-  // [날짜 검증 추가] 달력 선택 가능 여부 — 오늘 이전 & 사용 불가 날짜 비활성화
+  // 달력 날짜 선택 가능 여부 — 오늘 이전 또는 사용 불가 날짜면 false
   bool _isDayEnabled(DateTime day) {
-    final d = DateTime(day.year, day.month, day.day);
-    if (d.isBefore(_today)) return false;
-    return !_blockedDateSet.contains(d);
+    final d = DateTime(day.year, day.month, day.day); // 시간 제거
+    if (d.isBefore(_today)) return false;             // 오늘 이전 비활성
+    return !_blockedDateSet.contains(d);              // 사용 불가 Set에 있으면 비활성
   }
 
   // YYYY-MM-DD 포맷 헬퍼
@@ -226,6 +241,7 @@ class _StaySubscriptionApplyScreenState extends State<StaySubscriptionApplyScree
   @override
   Widget build(BuildContext context) {
     final item = widget.accommodation;
+    // 신청 버튼 활성 조건: 시작일이 선택되었고 날짜 겹침이 없어야 함
     final canSubmit = _startDate != null && !_hasDateConflict;
 
     return AppBaseLayout(
@@ -562,8 +578,9 @@ class _StaySubscriptionApplyScreenState extends State<StaySubscriptionApplyScree
   }
 
   Widget _buildPriceSummary(StayAccommodationDto item) {
+    // 실제 입력된 팀원 수 + 대표자 1명 = 총 팀 인원
     final filledCount = _memberControllers.where((c) => c.text.trim().isNotEmpty).length;
-    final teamCount = filledCount + 1; // 실제 입력된 팀원 + 대표자
+    final teamCount = filledCount + 1; // +1: 대표자 본인 포함
     final teamPrice = PriceCalculator.calculateTeamPrice(
       monthlyPrice: item.monthlyPrice,
       months: _durationMonths,
