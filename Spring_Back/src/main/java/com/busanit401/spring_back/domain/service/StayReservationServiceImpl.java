@@ -45,6 +45,7 @@ public class StayReservationServiceImpl implements StayReservationService {
             int gb = (b.getStatus() == StayReservationStatus.CANCELLED) ? 2
                     : b.getEndDate().isBefore(today) ? 3 : 1;
             if (ga != gb) return Integer.compare(ga, gb);
+            // 오름차순(과거위) : a.compareTo(b), 내림차순(최신위) : b.compareTo(a)
             if (ga == 1) return a.getStartDate().compareTo(b.getStartDate()); // 다가오는: 시작일 오름차순
             if (ga == 2) return b.getStartDate().compareTo(a.getStartDate()); // 취소: 최근순
             return b.getEndDate().compareTo(a.getEndDate());                  // 지난: 종료일 내림차순

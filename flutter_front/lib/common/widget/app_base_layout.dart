@@ -2,7 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_front/common/constants/app_colors.dart';
 
 /// 앱 전체 공통 Scaffold 레이아웃
-/// - 네이비 AppBar 스타일 통일
+/// - 초록 AppBar 스타일 통일
 /// - 배경색, 아이콘 색상 자동 적용
 class AppBaseLayout extends StatelessWidget {
   final String title;
